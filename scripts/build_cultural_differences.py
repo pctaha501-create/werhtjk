@@ -1,150 +1,208 @@
 from pathlib import Path
 from urllib.request import Request, urlopen
-from io import BytesIO
+from urllib.error import URLError, HTTPError
 from pptx import Presentation
 from pptx.util import Inches, Pt
 from pptx.dml.color import RGBColor
-from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
 from pptx.enum.shapes import MSO_SHAPE
-from pptx.enum.dml import MSO_THEME_COLOR
+from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
 
 OUT = Path("lectures/Cultural_Differences_Lecture.pptx")
 CACHE = Path(".image-cache")
 CACHE.mkdir(exist_ok=True)
 OUT.parent.mkdir(parents=True, exist_ok=True)
 
-# Real editorial / photo-hosted images (not AI-generated). Each has a fallback.
+# Real editorial photographs; each image has independent fallback sources.
 PHOTOS = {
- "cover": [
-  "https://inro.pdn.ac.lk/assets/images/testimonial/Dilki/10.jpg",
-  "https://www.maharaniweddings.com/wp-content/uploads/2011/06/Indian-wedding-fusion-japanese-1-copy.jpg"
- ],
- "bow": [
-  "https://www.newsweekjapan.jp/stories/assets_c/2019/03/almomen190312-japan-thumb-720x483-154264.jpg"
- ],
- "food": [
-  "https://cf-img-a-in.tosshub.com/sites/visualstory/wp/2025/07/eating-by-hand-2ITG-1751520866321.jpeg?size=%2A%3A900",
-  "https://recipecurrent.com/assets/images/d0261343-1514-4bac-73d5-3fd68a53cb00"
- ],
- "nowruz": ["https://www.happynowruz.com/assets/hero-haftsin-BEfXc3GV.webp"],
- "christmas": [
-  "https://www.jufahotels.com/wp-content/uploads/2024/08/weihnachten-familie-christbaum-jufa-hotels-scaled-1620x1080.jpeg.webp",
-  "https://images.pexels.com/photos/3303614/pexels-photo-3303614.jpeg?auto=compress&cs=tinysrgb&w=1920"
- ],
- "greeting": [
-  "https://cdn-ak.f.st-hatena.com/images/fotolife/k/kentikukun/20250717/20250717215805.jpg"
- ],
+    "cover": [
+        "https://www.maharaniweddings.com/wp-content/uploads/2011/06/Indian-wedding-fusion-japanese-1-copy.jpg",
+        "https://images.pexels.com/photos/8190802/pexels-photo-8190802.jpeg?auto=compress&cs=tinysrgb&w=1920",
+    ],
+    "bow": [
+        "https://www.cunard.com/content/dam/cunard/marketing-assets/destinations/guides/japan/japanese-bowing-custom-shutterstock-304118024.jpg.image.572.572.low.jpg",
+        "https://images.pexels.com/photos/8190802/pexels-photo-8190802.jpeg?auto=compress&cs=tinysrgb&w=1920",
+        "https://commons.wikimedia.org/wiki/Special:FilePath/Greeting_when_sitting.jpg",
+    ],
+    "food": [
+        "https://in-sight.symrise.com/fileadmin/_processed_/f/3/csm_multiculturalfoods_f87b945cf0.jpg",
+        "https://recipecurrent.com/assets/images/d0261343-1514-4bac-73d5-3fd68a53cb00",
+        "https://cf-img-a-in.tosshub.com/sites/visualstory/wp/2025/07/eating-by-hand-2ITG-1751520866321.jpeg?size=%2A%3A900",
+    ],
+    "nowruz": [
+        "https://i0.wp.com/ilearnfarsi.com/wp-content/uploads/2024/06/1c0d5-new-year.jpg?resize=1080%2C675&ssl=1",
+        "https://www.happynowruz.com/assets/hero-haftsin-BEfXc3GV.webp",
+    ],
+    "christmas": [
+        "https://images.pexels.com/photos/3303614/pexels-photo-3303614.jpeg?auto=compress&cs=tinysrgb&w=1920",
+        "https://www.jufahotels.com/wp-content/uploads/2024/08/weihnachten-familie-christbaum-jufa-hotels-scaled-1620x1080.jpeg.webp",
+    ],
+    "greeting": [
+        "https://cdn-ak.f.st-hatena.com/images/fotolife/k/kentikukun/20250717/20250717215805.jpg",
+        "https://images.pexels.com/photos/8190802/pexels-photo-8190802.jpeg?auto=compress&cs=tinysrgb&w=1920",
+    ],
 }
 
 def get_image(key):
-    path = CACHE / f"{key}.img"
-    if path.exists() and path.stat().st_size > 5000:
-        return path
+    cached = CACHE / f"{key}.img"
+    if cached.exists() and cached.stat().st_size > 5000:
+        return cached
     for url in PHOTOS[key]:
         try:
-            req = Request(url, headers={"User-Agent": "Mozilla/5.0 (compatible; CulturalDifferencesSlides/1.0)"})
-            with urlopen(req, timeout=25) as response:
+            req = Request(url, headers={"User-Agent": "Mozilla/5.0 CulturalDifferencesSlides/2.0"})
+            with urlopen(req, timeout=35) as response:
                 data = response.read()
-            if len(data) < 5000:
-                continue
-            path.write_bytes(data)
-            return path
+                ctype = response.headers.get("Content-Type", "")
+                if len(data) < 5000 or ("image" not in ctype and not data.startswith(b"\xff\xd8") and not data.startswith(b"RIFF") and not data.startswith(b"\x89PNG")):
+                    raise ValueError(f"Not a valid image response ({ctype}, {len(data)} bytes)")
+                cached.write_bytes(data)
+                print(f"Downloaded {key}: {len(data)} bytes")
+                return cached
         except Exception as exc:
             print(f"Image source failed for {key}: {url} ({exc})")
-    raise RuntimeError(f"No usable real photo could be downloaded for: {key}")
+    # If a source is temporarily unavailable, reuse a verified photo rather than fail the entire build.
+    for fallback_key in ("cover", "food", "greeting", "bow", "nowruz", "christmas"):
+        candidate = CACHE / f"{fallback_key}.img"
+        if fallback_key != key and candidate.exists() and candidate.stat().st_size > 5000:
+            print(f"Using verified {fallback_key} photo as fallback for {key}")
+            return candidate
+    raise RuntimeError(f"No real photograph could be downloaded for {key}; checked all fallback sources.")
 
 prs = Presentation()
 prs.slide_width = Inches(13.333)
 prs.slide_height = Inches(7.5)
 blank = prs.slide_layouts[6]
 NAVY = RGBColor(10, 18, 35)
-WHITE = RGBColor(255,255,255)
-GOLD = RGBColor(255,196,92)
-MINT = RGBColor(130,231,205)
+WHITE = RGBColor(255, 255, 255)
+GOLD = RGBColor(255, 196, 92)
 
-def add_bg(slide, key):
-    slide.shapes.add_picture(str(get_image(key)), 0, 0, width=prs.slide_width, height=prs.slide_height)
-    overlay = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, 0, 0, prs.slide_width, prs.slide_height)
-    overlay.fill.solid(); overlay.fill.fore_color.rgb = NAVY; overlay.fill.transparency = 35
-    overlay.line.fill.background()
+def add_bg(slide, key, left=0, width=None):
+    width = width or prs.slide_width
+    slide.shapes.add_picture(str(get_image(key)), left, 0, width=width, height=prs.slide_height)
 
-def textbox(slide, text, x, y, w, h, size, color=WHITE, bold=False, align=None):
-    shape = slide.shapes.add_textbox(Inches(x), Inches(y), Inches(w), Inches(h))
+def overlay(slide, left=0, width=None, transparency=35):
+    width = width or prs.slide_width
+    shape = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, left, 0, width, prs.slide_height)
+    shape.fill.solid()
+    shape.fill.fore_color.rgb = NAVY
+    shape.fill.transparency = transparency
+    shape.line.fill.background()
+
+def text(slide, value, x, y, w, h, size, color=WHITE, bold=False, align=None):
+    box = slide.shapes.add_textbox(Inches(x), Inches(y), Inches(w), Inches(h))
+    tf = box.text_frame
+    tf.clear()
+    tf.word_wrap = True
+    tf.margin_left = Inches(.04)
+    tf.margin_right = Inches(.04)
+    tf.margin_top = Inches(.02)
+    tf.margin_bottom = Inches(.02)
+    p = tf.paragraphs[0]
+    p.text = value
+    p.font.name = "Aptos Display"
+    p.font.size = Pt(size)
+    p.font.bold = bold
+    p.font.color.rgb = color
+    if align is not None:
+        p.alignment = align
+    return box
+
+def pill(slide, value, x=.75, y=.55):
+    shape = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(x), Inches(y), Inches(2.65), Inches(.42))
+    shape.fill.solid()
+    shape.fill.fore_color.rgb = GOLD
+    shape.line.fill.background()
     tf = shape.text_frame
-    tf.clear(); tf.word_wrap = True
-    tf.margin_left = Inches(0.04); tf.margin_right = Inches(0.04)
-    tf.margin_top = Inches(0.02); tf.margin_bottom = Inches(0.02)
-    p = tf.paragraphs[0]; p.text = text
-    p.font.name = "Aptos Display"; p.font.size = Pt(size); p.font.bold = bold; p.font.color.rgb = color
-    if align is not None: p.alignment = align
-    return shape
-
-def tag(slide, text, x=0.72, y=0.55):
-    s = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(x), Inches(y), Inches(2.5), Inches(0.42))
-    s.fill.solid(); s.fill.fore_color.rgb = GOLD; s.line.fill.background()
-    tf=s.text_frame; tf.clear(); tf.vertical_anchor=MSO_ANCHOR.MIDDLE
-    p=tf.paragraphs[0]; p.text=text.upper(); p.font.name="Aptos"; p.font.size=Pt(11); p.font.bold=True; p.font.color.rgb=NAVY; p.alignment=PP_ALIGN.CENTER
+    tf.clear()
+    tf.vertical_anchor = MSO_ANCHOR.MIDDLE
+    p = tf.paragraphs[0]
+    p.text = value.upper()
+    p.alignment = PP_ALIGN.CENTER
+    p.font.name = "Aptos"
+    p.font.size = Pt(11)
+    p.font.bold = True
+    p.font.color.rgb = NAVY
 
 def footer(slide, n, credit):
-    textbox(slide, f"{n:02d}  •  {credit}", 0.75, 7.08, 11.8, 0.22, 9, WHITE)
+    text(slide, f"{n:02d}   •   {credit}", .75, 7.12, 11.9, .22, 9, WHITE)
 
 # 1 — Cover
-s=prs.slides.add_slide(blank); add_bg(s,"cover")
-tag(s,"English presentation")
-textbox(s,"CULTURAL\nDIFFERENCES",0.8,2.0,8.9,2.35,48,WHITE,True)
-textbox(s,"One world. Many ways of life.",0.88,4.55,7.5,0.6,23,GOLD,True)
-textbox(s,"FOOD  •  GREETINGS  •  TRADITIONS  •  RESPECT",0.9,6.55,10.5,0.35,12,WHITE,True)
-footer(s,1,"Photo: University of Peradeniya / Maharani Weddings")
+s = prs.slides.add_slide(blank)
+add_bg(s, "cover")
+overlay(s, transparency=28)
+pill(s, "English presentation")
+text(s, "CULTURAL\nDIFFERENCES", .8, 2.0, 11.8, 2.25, 48, WHITE, True)
+text(s, "One world. Many ways of life.", .9, 4.55, 10.8, .55, 24, GOLD, True)
+text(s, "FOOD  •  GREETINGS  •  TRADITIONS  •  RESPECT", .9, 6.45, 11.5, .35, 13, WHITE, True)
+footer(s, 1, "Photo: Maharani Weddings")
 
-# 2 — Culture
-s=prs.slides.add_slide(blank); add_bg(s,"food"); tag(s,"What makes a culture?")
-textbox(s,"CULTURE IS\nEVERYDAY LIFE",0.8,1.65,6.8,1.7,40,WHITE,True)
-textbox(s,"FOOD     LANGUAGE\nVALUES   TRADITIONS",0.9,4.1,5.8,1.15,23,GOLD,True)
-textbox(s,"It shapes how we live and connect.",0.9,5.65,6.5,0.55,18,WHITE)
-footer(s,2,"Photo: India Today / RecipeCurrent")
+# 2 — What is culture?
+s = prs.slides.add_slide(blank)
+add_bg(s, "food")
+overlay(s, transparency=30)
+pill(s, "Everyday life")
+text(s, "WHAT MAKES A CULTURE?", .8, 1.55, 11.8, 1.0, 39, WHITE, True)
+text(s, "FOOD", .9, 3.35, 2.3, .6, 25, GOLD, True)
+text(s, "LANGUAGE", 3.6, 3.35, 3.0, .6, 25, WHITE, True)
+text(s, "VALUES", 7.0, 3.35, 2.3, .6, 25, GOLD, True)
+text(s, "TRADITIONS", 9.55, 3.35, 3.0, .6, 25, WHITE, True)
+text(s, "Culture shapes how we live and connect.", .9, 5.2, 10.5, .6, 21, WHITE)
+footer(s, 2, "Photo: Symrise In-Sight")
 
 # 3 — Greetings
-s=prs.slides.add_slide(blank); add_bg(s,"bow"); tag(s,"Different greetings")
-textbox(s,"A BOW OR\nA HANDSHAKE?",0.8,1.7,7.5,1.9,43,WHITE,True)
-textbox(s,"Japan  •  Bowing\nMany places  •  Handshakes",0.9,4.55,7.0,1.05,22,GOLD,True)
-textbox(s,"The meaning is respect.",0.9,5.85,6.2,0.45,18,WHITE)
-footer(s,3,"Photo: Newsweek Japan")
+s = prs.slides.add_slide(blank)
+add_bg(s, "bow")
+overlay(s, transparency=27)
+pill(s, "Different greetings")
+text(s, "A BOW OR A\nHANDSHAKE?", .8, 1.65, 8.7, 1.9, 43, WHITE, True)
+text(s, "JAPAN  •  BOWING", .9, 4.25, 5.8, .45, 23, GOLD, True)
+text(s, "Many other places  •  Handshakes", .9, 4.9, 7.5, .45, 19, WHITE)
+text(s, "The meaning is respect.", .9, 5.8, 7.5, .45, 20, WHITE, True)
+footer(s, 3, "Photo: Cunard / Pexels")
 
 # 4 — Food
-s=prs.slides.add_slide(blank); add_bg(s,"food"); tag(s,"Food & habits")
-textbox(s,"TASTE THE\nDIFFERENCE",0.8,1.55,6.5,1.8,43,WHITE,True)
-textbox(s,"Recipes tell stories.\nEating habits can differ, too.",0.9,4.15,6.7,1.05,22,GOLD,True)
-footer(s,4,"Photo: India Today / RecipeCurrent")
+s = prs.slides.add_slide(blank)
+add_bg(s, "food")
+overlay(s, transparency=24)
+pill(s, "Food & habits")
+text(s, "TASTE THE\nDIFFERENCE", .8, 1.6, 8.2, 1.8, 45, WHITE, True)
+text(s, "Recipes tell stories.", .9, 4.25, 6.0, .55, 25, GOLD, True)
+text(s, "Eating habits can differ, too.", .9, 4.95, 7.8, .55, 20, WHITE)
+footer(s, 4, "Photo: Symrise In-Sight")
 
-# 5 — Celebrations split
-s=prs.slides.add_slide(blank)
-s.shapes.add_picture(str(get_image("nowruz")),0,0,width=Inches(6.67),height=prs.slide_height)
-s.shapes.add_picture(str(get_image("christmas")),Inches(6.67),0,width=Inches(6.67),height=prs.slide_height)
-for x in (0,6.67):
-    ov=s.shapes.add_shape(MSO_SHAPE.RECTANGLE,Inches(x),0,Inches(6.67),prs.slide_height)
-    ov.fill.solid(); ov.fill.fore_color.rgb=NAVY; ov.fill.transparency=45; ov.line.fill.background()
-tag(s,"Celebrations",0.72,0.55)
-textbox(s,"NOWRUZ",0.75,2.35,5.3,0.8,36,WHITE,True)
-textbox(s,"Spring • Haft-Seen • New beginnings",0.8,3.35,5.5,1.0,17,GOLD,True)
-textbox(s,"CHRISTMAS",7.35,2.35,5.3,0.8,36,WHITE,True)
-textbox(s,"December 25 • Trees • Giving",7.4,3.35,5.2,1.0,17,GOLD,True)
-textbox(s,"Different celebrations, shared joy.",2.6,6.45,8.5,0.5,20,WHITE,True,PP_ALIGN.CENTER)
-footer(s,5,"Photos: HappyNowruz / JUFA Hotels")
+# 5 — Celebrations
+s = prs.slides.add_slide(blank)
+add_bg(s, "nowruz", 0, Inches(6.666))
+add_bg(s, "christmas", Inches(6.666), Inches(6.667))
+for x in (0, Inches(6.666)):
+    overlay(s, x, Inches(6.667), 48)
+pill(s, "Celebrations", .72, .55)
+text(s, "NOWRUZ", .75, 2.25, 5.7, .7, 34, WHITE, True)
+text(s, "Spring  •  Haft-Seen  •  New beginnings", .8, 3.15, 5.65, .85, 17, GOLD, True)
+text(s, "CHRISTMAS", 7.35, 2.25, 5.4, .7, 34, WHITE, True)
+text(s, "December 25  •  Trees  •  Giving", 7.4, 3.15, 5.4, .85, 17, GOLD, True)
+text(s, "Different celebrations, shared joy.", 2.0, 6.35, 9.3, .45, 20, WHITE, True, PP_ALIGN.CENTER)
+footer(s, 5, "Photos: iLearn Farsi / Pexels")
 
 # 6 — Everyday communication
-s=prs.slides.add_slide(blank); add_bg(s,"greeting"); tag(s,"Daily communication")
-textbox(s,"SMALL HABITS.\nBIG MEANINGS.",0.8,1.55,7.8,1.8,42,WHITE,True)
-textbox(s,"TIME     PERSONAL SPACE\nGESTURES     BODY LANGUAGE",0.9,4.2,8.5,1.1,21,GOLD,True)
-textbox(s,"Observe first. Never assume.",0.9,5.75,6.5,0.5,18,WHITE)
-footer(s,6,"Photo: Singapore Info")
+s = prs.slides.add_slide(blank)
+add_bg(s, "greeting")
+overlay(s, transparency=27)
+pill(s, "Daily communication")
+text(s, "SMALL HABITS.\nBIG MEANINGS.", .8, 1.6, 9.5, 1.8, 43, WHITE, True)
+text(s, "TIME       PERSONAL SPACE", .9, 4.15, 9.7, .5, 22, GOLD, True)
+text(s, "GESTURES       BODY LANGUAGE", .9, 4.85, 10.5, .5, 22, WHITE, True)
+text(s, "Observe first. Never assume.", .9, 5.8, 8.0, .45, 19, WHITE)
+footer(s, 6, "Photo: Singapore Info")
 
 # 7 — Closing
-s=prs.slides.add_slide(blank); add_bg(s,"cover")
-tag(s,"The message")
-textbox(s,"DIFFERENT DOESN'T\nMEAN WRONG.",0.8,1.55,10.8,1.9,42,WHITE,True)
-textbox(s,"RESPECT  •  CURIOSITY  •  UNDERSTANDING",0.9,4.25,10.5,0.55,20,GOLD,True)
-textbox(s,"THANK YOU!",0.9,5.55,5.5,0.8,34,WHITE,True)
-footer(s,7,"Photo: University of Peradeniya / Maharani Weddings")
+s = prs.slides.add_slide(blank)
+add_bg(s, "cover")
+overlay(s, transparency=30)
+pill(s, "The message")
+text(s, "DIFFERENT DOESN'T\nMEAN WRONG.", .8, 1.65, 11.8, 1.9, 42, WHITE, True)
+text(s, "RESPECT  •  CURIOSITY  •  UNDERSTANDING", .9, 4.2, 11.4, .55, 19, GOLD, True)
+text(s, "THANK YOU!", .9, 5.35, 8.0, .75, 34, WHITE, True)
+footer(s, 7, "Photo: Maharani Weddings")
 
 prs.core_properties.title = "Cultural Differences"
 prs.core_properties.subject = "English class presentation"
